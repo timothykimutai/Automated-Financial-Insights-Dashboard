@@ -27,106 +27,58 @@ class FinancialDataFetcher:
         # Default symbols to track
         self.default_symbols = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'META']
 
-    def fetch_stock_data(self, symbols=None, period="1y"):
-        """
-        Fetch stock data for given symbols and period
-        """
+    def fetch_stock_data(self, symbols=None):
         if symbols is None:
             symbols = self.default_symbols
-            
-        all_data = {}
+
+        collection = self.db['stock_data']
+
         for symbol in symbols:
             try:
-                logger.info(f"Fetching data for {symbol}")
-                
-                # Create Ticker object
-                ticker = yf.Ticker(symbol)
-                
-                # Fetch historical data
-                df = ticker.history(period=period)
-                
+                logger.info(f"Fetching latest data for {symbol}")
+
+                # Get last available date from MongoDB
+                latest_record = collection.find_one(
+                    {"Symbol": symbol}, sort=[("Date", -1)]
+                )
+                last_date = latest_record['Date'] if latest_record else "2025-02-12"
+                start_date = (pd.to_datetime(last_date) + timedelta(days=1)).strftime('%Y-%m-%d')
+
+                # Fetch new stock data
+                df = yf.download(symbol, start=start_date)
+
                 if df.empty:
-                    logger.warning(f"Empty dataset received for {symbol}")
+                    logger.warning(f"No new data for {symbol}")
                     continue
-                
-                # Reset index to make Date a column
+
+                # Reset index and clean data
                 df = df.reset_index()
-                
-                # Ensure Date column is datetime
-                df['Date'] = pd.to_datetime(df['Date'])
-                
-                # Convert all price columns to numeric, replacing any invalid values with NaN
-                price_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-                for col in price_columns:
-                    if col in df.columns:
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
-                
-                # Drop any rows where Close price is NaN
-                df = df.dropna(subset=['Close'])
-                
-                if df.empty:
-                    logger.warning(f"No valid price data for {symbol} after cleaning")
-                    continue
-                
-                # Calculate returns and metrics
-                df['Daily_Return'] = df['Close'].pct_change()
-                df['Volatility'] = df['Daily_Return'].rolling(window=20, min_periods=1).std()
-                df['SMA_20'] = df['Close'].rolling(window=20, min_periods=1).mean()
-                df['SMA_50'] = df['Close'].rolling(window=50, min_periods=1).mean()
-                
-                # Fill NaN values with 0 for returns and metrics
-                df['Daily_Return'] = df['Daily_Return'].fillna(0)
-                df['Volatility'] = df['Volatility'].fillna(0)
-                df['SMA_20'] = df['SMA_20'].fillna(df['Close'])
-                df['SMA_50'] = df['SMA_50'].fillna(df['Close'])
-                
-                # Add symbol column
-                df['Symbol'] = symbol
-                
-                # Convert date to string for MongoDB
                 df['Date'] = df['Date'].dt.strftime('%Y-%m-%d')
-                
-                # Convert DataFrame to records
+                df['Symbol'] = symbol
+
+                # Calculate indicators
+                df['Daily_Return'] = df['Close'].pct_change().fillna(0)
+                df['Volatility'] = df['Daily_Return'].rolling(window=20, min_periods=1).std().fillna(0)
+                df['SMA_20'] = df['Close'].rolling(window=20, min_periods=1).mean().fillna(df['Close'])
+                df['SMA_50'] = df['Close'].rolling(window=50, min_periods=1).mean().fillna(df['Close'])
+
+                # Convert to dictionary
                 records = df.to_dict('records')
-                
-                # Store in MongoDB
-                self.store_data(symbol, records)
-                
-                all_data[symbol] = records
-                logger.info(f"Successfully processed {len(records)} records for {symbol}")
-                
+
+                # Insert or update records
+                for record in records:
+                    collection.update_one(
+                        {"Symbol": symbol, "Date": record["Date"]},
+                        {"$set": record},
+                        upsert=True  # Insert if not found
+                    )
+
+                logger.info(f"Updated {len(records)} records for {symbol}")
+
             except Exception as e:
-                logger.error(f"Error processing {symbol}: {str(e)}")
-                continue
-                
-        return all_data
-    
-    def store_data(self, symbol, records):
-        """
-        Store the fetched data in MongoDB
-        """
-        if not records:
-            logger.warning(f"No records to store for {symbol}")
-            return
-            
-        try:
-            collection = self.db['stock_data']
-            
-            # Delete existing data for this symbol
-            collection.delete_many({'Symbol': symbol})
-            
-            # Insert new data
-            collection.insert_many(records)
-            logger.info(f"Successfully stored {len(records)} records for {symbol}")
-            
-        except Exception as e:
-            logger.error(f"Error storing data for {symbol}: {str(e)}")
-            raise
-    
+                logger.error(f"Error fetching data for {symbol}: {str(e)}")
+
     def get_summary_metrics(self, symbols=None):
-        """
-        Calculate summary metrics for the specified symbols
-        """
         if symbols is None:
             symbols = self.default_symbols
             
@@ -150,13 +102,16 @@ class FinancialDataFetcher:
                 # Convert to DataFrame
                 df = pd.DataFrame(data)
                 
-                # Ensure we have numeric Close prices
+                # Ensure proper sorting
+                df = df.sort_values(by='Date', ascending=True)
+                
+                # Ensure numeric Close prices
                 df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
                 df['Daily_Return'] = pd.to_numeric(df['Daily_Return'], errors='coerce')
                 
                 # Calculate metrics
-                latest_price = float(df['Close'].iloc[0])
-                oldest_price = float(df['Close'].iloc[-1])
+                latest_price = df['Close'].iloc[-1] if not df['Close'].isnull().all() else 0
+                oldest_price = df['Close'].iloc[0] if not df['Close'].isnull().all() else 0
                 monthly_return = ((latest_price / oldest_price - 1) * 100) if oldest_price != 0 else 0
                 
                 # Calculate annualized volatility
@@ -167,7 +122,7 @@ class FinancialDataFetcher:
                     'latest_price': round(latest_price, 2),
                     'monthly_return': round(monthly_return, 2),
                     'volatility': round(annualized_volatility, 2),
-                    'last_updated': data[0]['Date']
+                    'last_updated': df['Date'].iloc[-1] if not df.empty else "N/A"
                 }
                 
             except Exception as e:
@@ -177,11 +132,10 @@ class FinancialDataFetcher:
         return summary_metrics
 
 if __name__ == "__main__":
-    # Test the data fetcher
     fetcher = FinancialDataFetcher()
     try:
         print("Starting initial data fetch...")
-        data = fetcher.fetch_stock_data(['AAPL'])  # Test with a single symbol first
+        fetcher.fetch_stock_data(['AAPL'])  
         print("Data fetched and stored successfully!")
         
         # Test metrics calculation
