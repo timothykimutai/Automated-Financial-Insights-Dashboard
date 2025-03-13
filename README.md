@@ -1,7 +1,9 @@
 # 📊 Financial Insights Dashboard
+![screencapture-127-0-0-1-8050-2025-03-13-05_57_48](https://github.com/user-attachments/assets/8e8a93f1-4e0d-454f-abde-a3f05777f9e8)
 
 ## 📖 Project Overview
 The **Financial Insights Dashboard** is a web application built with Python, Dash, and Flask that provides real-time stock market insights. It fetches, processes, and visualizes financial data, making it easier to analyze trends and performance metrics for various stocks. MongoDB is used for persistent storage, and Power BI integration supports advanced reporting.
+![screencapture-127-0-0-1-8050-2025-03-13-05_56_37](https://github.com/user-attachments/assets/2e7b9692-cfad-4ff7-9776-fab484504bd8)
 
 ## 🚀 Features
 - 📈 Interactive candlestick charts with 20-day and 50-day moving averages.
@@ -49,7 +51,7 @@ The **Financial Insights Dashboard** is a web application built with Python, Das
 - **GET** `/api/v1/stock/performance`: Daily performance comparisons.
 
 ## 📊 Sample Power BI Integration
-- Add a Web Data Source with: `http://127.0.0.1:5000/api/v1/stock/metrics/all`
+- Add a Web Data Source with: `http://127.0.0.1:8050/api/v1/stock/metrics/all`
 - Refresh to get the latest stock metrics.
 
 ## 🛠️ Troubleshooting
